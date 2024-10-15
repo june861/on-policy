@@ -40,6 +40,9 @@ class R_MAPPO():
         self._use_value_active_masks = args.use_value_active_masks
         self._use_policy_active_masks = args.use_policy_active_masks
         
+        # DONE(junweiluo) : 增加一个参数是否使用action_distributions
+        self._use_action_distributions = args.use_action_distributions
+
         assert (self._use_popart and self._use_valuenorm) == False, ("self._use_popart and self._use_valuenorm can not be set True simultaneously")
         
         if self._use_popart:
@@ -108,33 +111,42 @@ class R_MAPPO():
         else:
             share_obs_batch, obs_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, \
             value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, \
-            adv_targ, available_actions_batch, _ = sample
-
+            adv_targ, available_actions_batch, action_distributions = sample
+        # DONE(junweiluo)： 增加了action_distribution & action_old_distribution
         old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
         adv_targ = check(adv_targ).to(**self.tpdv)
         value_preds_batch = check(value_preds_batch).to(**self.tpdv)
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
+        action_distributions = check(action_distributions).to(**self.tpdv)
 
         # Reshape to do in a single forward pass for all steps
-        values, action_log_probs, dist_entropy = self.policy.evaluate_actions(share_obs_batch,
-                                                                              obs_batch, 
-                                                                              rnn_states_batch, 
-                                                                              rnn_states_critic_batch, 
-                                                                              actions_batch, 
-                                                                              masks_batch, 
-                                                                              available_actions_batch,
-                                                                              active_masks_batch)
+        values, action_log_probs, dist_entropy, action_old_distribution = self.policy.evaluate_actions(share_obs_batch,
+                                                                                                        obs_batch, 
+                                                                                                        rnn_states_batch, 
+                                                                                                        rnn_states_critic_batch, 
+                                                                                                        actions_batch, 
+                                                                                                        masks_batch, 
+                                                                                                        available_actions_batch,
+                                                                                                        active_masks_batch)
         # actor update
-        imp_weights = torch.exp(action_log_probs - old_action_log_probs_batch)
+        # DONE(junweiluo) : action_log_probs 转变为 action_distributions
+        if self._use_action_distributions == True:
+            imp_weights = torch.exp(action_distributions -  action_old_distribution)
+        else:
+            imp_weights = torch.exp(action_log_probs - old_action_log_probs_batch)
 
         surr1 = imp_weights * adv_targ
         surr2 = torch.clamp(imp_weights, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv_targ
 
         if self._use_policy_active_masks:
+            # DONE(junweiluo) : 尝试不取平均
+            # policy_action_loss = (-torch.sum(torch.min(surr1, surr2),
+            #                                  dim=-1,
+            #                                  keepdim=True) * active_masks_batch).sum() / active_masks_batch.sum()
             policy_action_loss = (-torch.sum(torch.min(surr1, surr2),
-                                             dim=-1,
-                                             keepdim=True) * active_masks_batch).sum() / active_masks_batch.sum()
+                                    dim=-1,
+                                    keepdim=True) * active_masks_batch).sum()
         else:
             policy_action_loss = -torch.sum(torch.min(surr1, surr2), dim=-1, keepdim=True).mean()
 

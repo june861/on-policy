@@ -28,14 +28,19 @@ class SMACRunner(Runner):
 
             for step in range(self.episode_length):
                 # Sample actions
-                values, actions, action_log_probs, rnn_states, rnn_states_critic = self.collect(step)
+                values, actions, action_log_probs, action_distributions, rnn_states, rnn_states_critic = self.collect(step)
                     
                 # Obser reward and next obs
                 obs, share_obs, rewards, dones, infos, available_actions = self.envs.step(actions)
 
+                # DONE(junweiluo): 将action_distribution也放入buffer中
+                # 初始代码片段：
+                # data = obs, share_obs, rewards, dones, infos, available_actions, \
+                #        values, actions, action_log_probs, \
+                #        rnn_states, rnn_states_critic
                 data = obs, share_obs, rewards, dones, infos, available_actions, \
                        values, actions, action_log_probs, \
-                       rnn_states, rnn_states_critic 
+                       rnn_states, rnn_states_critic, action_distributions
                 
                 # insert data into buffer
                 self.insert(data)
@@ -110,7 +115,8 @@ class SMACRunner(Runner):
     @torch.no_grad()
     def collect(self, step):
         self.trainer.prep_rollout()
-        value, action, action_log_prob, rnn_state, rnn_state_critic \
+        # DONE(junweiluo): add action distribution into collect func
+        value, action, action_log_prob, action_distribution, rnn_state, rnn_state_critic \
             = self.trainer.policy.get_actions(np.concatenate(self.buffer.share_obs[step]),
                                             np.concatenate(self.buffer.obs[step]),
                                             np.concatenate(self.buffer.rnn_states[step]),
@@ -124,11 +130,13 @@ class SMACRunner(Runner):
         rnn_states = np.array(np.split(_t2n(rnn_state), self.n_rollout_threads))
         rnn_states_critic = np.array(np.split(_t2n(rnn_state_critic), self.n_rollout_threads))
 
-        return values, actions, action_log_probs, rnn_states, rnn_states_critic
+        action_distributions = np.array(np.split(_t2n(action_distribution), self.n_rollout_threads))
+
+        return values, actions, action_log_probs, action_distributions, rnn_states, rnn_states_critic
 
     def insert(self, data):
         obs, share_obs, rewards, dones, infos, available_actions, \
-        values, actions, action_log_probs, rnn_states, rnn_states_critic = data
+        values, actions, action_log_probs, rnn_states, rnn_states_critic, action_distributions = data
 
         dones_env = np.all(dones, axis=1)
 
@@ -148,7 +156,7 @@ class SMACRunner(Runner):
             share_obs = obs
 
         self.buffer.insert(share_obs, obs, rnn_states, rnn_states_critic,
-                           actions, action_log_probs, values, rewards, masks, bad_masks, active_masks, available_actions)
+                           actions, action_log_probs, values, rewards, masks, bad_masks, active_masks, available_actions, action_distributions)
 
     def log_train(self, train_infos, total_num_steps):
         train_infos["average_step_rewards"] = np.mean(self.buffer.rewards)

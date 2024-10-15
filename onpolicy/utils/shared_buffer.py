@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import torch.nn.functional as F
-from onpolicy.utils.util import get_shape_from_obs_space, get_shape_from_act_space
+from onpolicy.utils.util import get_shape_from_obs_space, get_shape_from_act_space, get_act_space_dim
 
 
 def _flatten(T, N, x):
@@ -80,6 +80,10 @@ class SharedReplayBuffer(object):
             (self.episode_length, self.n_rollout_threads, num_agents, act_shape), dtype=np.float32)
         self.rewards = np.zeros(
             (self.episode_length, self.n_rollout_threads, num_agents, 1), dtype=np.float32)
+    
+        # DONE(juneweiluo): 增加self.action_distributions
+        self.action_distributions = np.zeros(
+            (self.episode_length, self.n_rollout_threads, num_agents, get_act_space_dim(act_space)), dtype=np.float32)
 
         self.masks = np.ones((self.episode_length + 1, self.n_rollout_threads, num_agents, 1), dtype=np.float32)
         self.bad_masks = np.ones_like(self.masks)
@@ -88,7 +92,8 @@ class SharedReplayBuffer(object):
         self.step = 0
 
     def insert(self, share_obs, obs, rnn_states_actor, rnn_states_critic, actions, action_log_probs,
-               value_preds, rewards, masks, bad_masks=None, active_masks=None, available_actions=None):
+               value_preds, rewards, masks, bad_masks=None, active_masks=None, available_actions=None, action_distributions=None):
+        # DONE(junweiluo) : 增加action_distributions参数
         """
         Insert data into the buffer.
         :param share_obs: (argparse.Namespace) arguments containing relevant model, policy, and env information.
@@ -103,6 +108,7 @@ class SharedReplayBuffer(object):
         :param bad_masks: (np.ndarray) action space for agents.
         :param active_masks: (np.ndarray) denotes whether an agent is active or dead in the env.
         :param available_actions: (np.ndarray) actions available to each agent. If None, all actions are available.
+        :param action_distributions :(np.ndarray) 动作分布概率
         """
         self.share_obs[self.step + 1] = share_obs.copy()
         self.obs[self.step + 1] = obs.copy()
@@ -119,6 +125,8 @@ class SharedReplayBuffer(object):
             self.active_masks[self.step + 1] = active_masks.copy()
         if available_actions is not None:
             self.available_actions[self.step + 1] = available_actions.copy()
+        if action_distributions is not None:
+            self.action_distributions[self.step] = action_distributions.copy()
 
         self.step = (self.step + 1) % self.episode_length
 
@@ -333,9 +341,16 @@ class SharedReplayBuffer(object):
             else:
                 adv_targ = advantages[indices].reshape(-1, *advantages.shape[2:])
 
+            # DONE(junweiluo) : 增加action_distribution的返回值
+            if self.action_distributions is None:
+                action_distributions = None
+            else:
+                action_distributions = self.action_distributions[indices]
+
+            
             yield share_obs_batch, obs_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, \
                   value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, \
-                  adv_targ, available_actions_batch
+                  adv_targ, available_actions_batch, action_distributions
 
     def feed_forward_generator(self, advantages, num_mini_batch=None, mini_batch_size=None):
         """
@@ -373,6 +388,7 @@ class SharedReplayBuffer(object):
         active_masks = self.active_masks[:-1].reshape(-1, 1)
         action_log_probs = self.action_log_probs.reshape(-1, self.action_log_probs.shape[-1])
         advantages = advantages.reshape(-1, 1)
+        action_distributions = self.action_distributions.reshape(-1,self.action_distributions.shape[-1])
 
         for indices in sampler:
             # obs size [T+1 N M Dim]-->[T N M Dim]-->[T*N*M,Dim]-->[index,Dim]
@@ -394,10 +410,14 @@ class SharedReplayBuffer(object):
                 adv_targ = None
             else:
                 adv_targ = advantages[indices]
+            
+            # DONE(junweiluo) : 增加action_distribution的返回值
+
+            action_distributions = action_distributions[indices]
 
             yield share_obs_batch, obs_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch,\
                   value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch,\
-                  adv_targ, available_actions_batch
+                  adv_targ, available_actions_batch, action_distributions
 
     def naive_recurrent_generator(self, advantages, num_mini_batch):
         """

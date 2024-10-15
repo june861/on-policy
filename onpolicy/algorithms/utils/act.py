@@ -52,6 +52,8 @@ class ACTLayer(nn.Module):
         :return actions: (torch.Tensor) actions to take.
         :return action_log_probs: (torch.Tensor) log probabilities of taken actions.
         """
+
+        action_logits = None
         if self.mixed_action :
             actions = []
             action_log_probs = []
@@ -88,7 +90,14 @@ class ACTLayer(nn.Module):
             actions = action_logits.mode() if deterministic else action_logits.sample() 
             action_log_probs = action_logits.log_probs(actions)
         
-        return actions, action_log_probs
+        
+        # DONE(junweiluo): add action_logits distributions
+        if action_logits != None:
+            action_distributions = action_logits.probs
+        else:
+            action_distributions = None
+        
+        return actions, action_log_probs, action_distributions
 
     def get_probs(self, x, available_actions=None):
         """
@@ -124,6 +133,8 @@ class ACTLayer(nn.Module):
         :return action_log_probs: (torch.Tensor) log probabilities of the input actions.
         :return dist_entropy: (torch.Tensor) action distribution entropy for the given inputs.
         """
+        # DONE(junweiluo): 增加了action_old_distributions 作为返回值
+        action_old_distribution = None
         if self.mixed_action:
             a, b = action.split((2, 1), -1)
             b = b.long()
@@ -166,6 +177,7 @@ class ACTLayer(nn.Module):
                 dist_entropy = (action_logits.entropy()*active_masks.squeeze(-1)).sum()/active_masks.sum()
             else:
                 dist_entropy = action_logits.entropy().mean()
+            action_old_distribution = action_logits.probs
 
         else:
             action_logits = self.action_out(x, available_actions)
@@ -174,8 +186,9 @@ class ACTLayer(nn.Module):
                 dist_entropy = (action_logits.entropy()*active_masks.squeeze(-1)).sum()/active_masks.sum()
             else:
                 dist_entropy = action_logits.entropy().mean()
-        
-        return action_log_probs, dist_entropy
+            action_old_distribution = action_logits.probs
+
+        return action_log_probs, dist_entropy, action_old_distribution
 
     def evaluate_actions_trpo(self, x, action, available_actions=None, active_masks=None):
         """

@@ -119,9 +119,11 @@ def parse_args(args, parser):
     parser.add_argument("--use_state_agent", action='store_false', default=True)
     parser.add_argument("--use_mustalive", action='store_false', default=True)
     parser.add_argument("--add_center_xy", action='store_false', default=True)
+    # DONE(junweiluo)： 增加了动作分布概率是否使用参数
+    parser.add_argument("--use_action_distributions", action='store_false', default=True)
 
     all_args = parser.parse_known_args(args)[0]
-
+    print(f'action distribution is {all_args.use_action_distributions}')
     return all_args
 
 

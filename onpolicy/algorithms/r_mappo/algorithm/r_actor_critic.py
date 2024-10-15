@@ -66,9 +66,9 @@ class R_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        actions, action_log_probs = self.act(actor_features, available_actions, deterministic)
+        actions, action_log_probs, action_distribution = self.act(actor_features, available_actions, deterministic)
 
-        return actions, action_log_probs, rnn_states
+        return actions, action_log_probs, action_distribution, rnn_states
 
     def evaluate_actions(self, obs, rnn_states, action, masks, available_actions=None, active_masks=None):
         """
@@ -108,13 +108,14 @@ class R_Actor(nn.Module):
 
             return action_log_probs, dist_entropy, action_mu, action_std, all_probs
         else:
-            action_log_probs, dist_entropy = self.act.evaluate_actions(actor_features,
+            # DONE(junweiluo) : 增加了action_old_distribution作为返回值
+            action_log_probs, dist_entropy, action_old_distribution = self.act.evaluate_actions(actor_features,
                                                                     action, available_actions,
                                                                     active_masks=
                                                                     active_masks if self._use_policy_active_masks
                                                                     else None)
 
-        return action_log_probs, dist_entropy
+            return action_log_probs, dist_entropy, action_old_distribution
 
 
 class R_Critic(nn.Module):

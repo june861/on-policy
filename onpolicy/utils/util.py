@@ -50,6 +50,19 @@ def get_shape_from_act_space(act_space):
         act_shape = act_space[0].shape[0] + 1  
     return act_shape
 
+# DONE(junweiluo): 增加一个函数来获取动作维度大小
+def get_act_space_dim(act_space):
+    if act_space.__class__.__name__ == 'Discrete':
+        act_space_dim = act_space.n 
+    elif act_space.__class__.__name__ == "MultiDiscrete":
+        act_space_dim = act_space.shape
+    elif act_space.__class__.__name__ == "Box":
+        act_space_dim = act_space.shape[0]
+    elif act_space.__class__.__name__ == "MultiBinary":
+        act_space_dim = act_space.shape[0]
+    else:  # agar
+        act_space_dim = act_space[0].shape[0] + 1  
+    return act_space_dim
 
 def tile_images(img_nhwc):
     """
