@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from onpolicy.utils.util import get_gard_norm, huber_loss, mse_loss
 from onpolicy.utils.valuenorm import ValueNorm
-from onpolicy.algorithms.utils.util import check
+from onpolicy.algorithms.utils.util import check, discrete_kl_divergence
 
 class R_MAPPO():
     """
@@ -118,10 +118,10 @@ class R_MAPPO():
         value_preds_batch = check(value_preds_batch).to(**self.tpdv)
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
-        action_distributions = check(action_distributions).to(**self.tpdv)
+        old_action_distributions = check(action_distributions).to(**self.tpdv)
 
         # Reshape to do in a single forward pass for all steps
-        values, action_log_probs, dist_entropy, action_old_distribution = self.policy.evaluate_actions(share_obs_batch,
+        values, action_log_probs, dist_entropy, action_distributions = self.policy.evaluate_actions(share_obs_batch,
                                                                                                         obs_batch, 
                                                                                                         rnn_states_batch, 
                                                                                                         rnn_states_critic_batch, 
@@ -132,7 +132,17 @@ class R_MAPPO():
         # actor update
         # DONE(junweiluo) : action_log_probs 转变为 action_distributions
         if self._use_action_distributions == True:
-            imp_weights = torch.exp(action_distributions -  action_old_distribution)
+            # 使用MSE损失来度量动作概率分布差异
+            # imp_weights = torch.nn.functional.mse_loss(old_action_distributions, action_distributions, reduction="none").mean(dim = 1).unsqueeze(1)
+            # 使用Cross-Entropy Loss来度量动作概率分布差异
+            # imp_weights = - (old_action_distributions * torch.log(action_distributions + 1e-10)).mean(dim=1).unsqueeze(1)
+            # 使用KL散度来计算重要性采样中两个分布之间的差异
+            # imp_weights = discrete_kl_divergence(action_distributions, old_action_distributions)
+            # 比值法
+            # imp_weights = torch.exp(action_distributions -  old_action_distributions)
+            # 选取每个动作的概率相比后再相乘
+            imp_weights = action_distributions / (old_action_distributions + 1e-10)
+            imp_weights = torch.exp(torch.prod(imp_weights, axis=1, keepdim=True))
         else:
             imp_weights = torch.exp(action_log_probs - old_action_log_probs_batch)
 
@@ -140,13 +150,9 @@ class R_MAPPO():
         surr2 = torch.clamp(imp_weights, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv_targ
 
         if self._use_policy_active_masks:
-            # DONE(junweiluo) : 尝试不取平均
-            # policy_action_loss = (-torch.sum(torch.min(surr1, surr2),
-            #                                  dim=-1,
-            #                                  keepdim=True) * active_masks_batch).sum() / active_masks_batch.sum()
             policy_action_loss = (-torch.sum(torch.min(surr1, surr2),
-                                    dim=-1,
-                                    keepdim=True) * active_masks_batch).sum()
+                                             dim=-1,
+                                             keepdim=True) * active_masks_batch).sum() / active_masks_batch.sum()
         else:
             policy_action_loss = -torch.sum(torch.min(surr1, surr2), dim=-1, keepdim=True).mean()
 
@@ -206,7 +212,7 @@ class R_MAPPO():
         train_info['dist_entropy'] = 0
         train_info['actor_grad_norm'] = 0
         train_info['critic_grad_norm'] = 0
-        train_info['ratio'] = 0
+        train_info['ratio'] = 0 
 
         for _ in range(self.ppo_epoch):
             if self._use_recurrent_policy:
